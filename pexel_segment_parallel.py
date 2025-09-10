@@ -616,7 +616,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--video_folder",
         type=str,
-        required=True
+        required=False
     )
     parser.add_argument(
         "--json_save_folder",
