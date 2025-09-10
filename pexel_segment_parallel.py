@@ -18,6 +18,7 @@ import torch.multiprocessing as mp
 from pycocotools import mask as mask_utils
 from tqdm import tqdm
 
+from huggingface_hub import snapshot_download
 from sam2.build_sam import build_sam2_video_predictor, build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection 
@@ -88,7 +89,7 @@ def save_video_mask_as_json(
         save_path: str,
         verbose: bool=False,
 ):
-    """save the given three list into .json file
+    """Save the given three list into .json file
 
     param:
         @images:
@@ -138,8 +139,7 @@ def load_video_as_tensor(
         resolution_limit: bool=True,
         discard_interval: int=None,
 ):
-    """
-    Read a video and save it as a tensor.
+    """Read a video and save it as a tensor.
 
     Args:
         video_path (str): Path to the input video file.
@@ -250,16 +250,13 @@ def get_mask_json(rank, json_save_folder, video_file_lists, locks, args):
         json_save_folder: folder to save .json file
         args: Tuple containing (gpu_id, task_st, task_ed)
     """
-    
-    # use bfloat16
-    # torch.autocast(device_type=_device, dtype=torch.bfloat16).__enter__()
 
     gpu_id, task_st, task_ed = args[rank]
     _device = f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu"
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)   # optional but safe
     torch.cuda.set_device(gpu_id)
     torch.autocast(device_type=_device, dtype=torch.bfloat16).__enter__()
-    print(f"[rank {rank}]: using {_device} (physical GPU {gpu_id})")
+    print(f"[Rank {rank}]: using {_device} (physical GPU {gpu_id})")
     print(f"[Rank {rank}]: Model on Device {_device} (GPU {gpu_id})")
     print(f"[Rank {rank}]: task_st == {task_st}, task_ed == {task_ed}")
     print(f"[Rank {rank}]: CUDA visibility = {os.environ['CUDA_VISIBLE_DEVICES']}")
@@ -273,10 +270,17 @@ def get_mask_json(rank, json_save_folder, video_file_lists, locks, args):
 
     # init grounding dino model from huggingface
     model_id = "IDEA-Research/grounding-dino-tiny"
-    _processor = AutoProcessor.from_pretrained(model_id, local_files_only=True)
+    cache_dir = "./local_model_cache"
+    local_model_path = snapshot_download(repo_id=model_id, cache_dir=cache_dir)
+    _processor = AutoProcessor.from_pretrained(local_model_path,
+                                               local_files_only=True)
     _grounding_model = (AutoModelForZeroShotObjectDetection
-                        .from_pretrained(model_id, local_files_only=True)
+                        .from_pretrained(local_model_path, local_files_only=True)
                         .to(_device))
+    # _processor = AutoProcessor.from_pretrained(model_id, local_files_only=True)
+    # _grounding_model = (AutoModelForZeroShotObjectDetection
+    #                     .from_pretrained(model_id, local_files_only=True)
+    #                     .to(_device))
     gpu_lock = locks[gpu_id]
     failed_video_counter = 0
     start_time = time.time()
@@ -523,9 +527,6 @@ def launch_parallel_video_processing(
 
     # task list
     video_file_list = []
-    # video_file_list = [os.path.abspath(os.path.join(video_folder, file_name))
-    #                     for file_name in os.listdir(video_folder)
-    #                     if os.path.splitext(file_name)[-1] in [".mp4"]]
     if video_folder is not None:
         for parent_dir, subdirs, file_list in os.walk(video_folder):
             for file_name in file_list:
@@ -579,8 +580,8 @@ def launch_parallel_video_processing(
     start_time = time.time()
     try:
         mp.spawn(get_mask_json,
-                args=(json_save_folder, undo_task_list, locks, args_list),
-                nprocs=max_process)
+                 args=(json_save_folder, undo_task_list, locks, args_list),
+                 nprocs=max_process)
     except Exception as e:
         print(f"[Rank Main]: An exception is caught: {e}\n" + "-" * 80 + "\n")
     time_cost = time.time() - start_time

@@ -157,3 +157,4 @@ demo_images/
 *.pth*
 *.pt*
 notebooks/
+local_model_cache/
