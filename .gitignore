@@ -146,12 +146,14 @@ outputs/
 
 .idea/
 
+tracking_results/
 human_free_27K_processed.csv
 assets/
-checkpoints/
+# checkpoints/
 demo/
 demo_images/
-examples/
-gdino_checkpoints/
+# examples/
+# gdino_checkpoints/
+*.pth*
+*.pt*
 notebooks/
-training/
