@@ -114,7 +114,7 @@ def save_video_mask_as_json(
             dict list, each item is a dict
             each dict {
                 "name": str, category name,
-                "id": int, category id, start from 1
+                "id": int, category id, start at 1
             }
         
             
@@ -174,8 +174,8 @@ def load_video_as_tensor(
         ret, frame = cap.read()
         if not ret:
             break
-        if (discard_interval is not None and
-            (frame_idx_counter + 1) % discard_interval != 0):
+        if (discard_interval is None
+            or (frame_idx_counter + 1) % discard_interval != 0):
             frame = cv2.resize(frame, (resize_width, resize_height))
             # Convert BGR to RGB and then to tensor
             frame = np.ascontiguousarray(frame[:, :, ::-1])

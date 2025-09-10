@@ -13,6 +13,7 @@ import argparse
 import numpy as np
 import pandas as pd
 from PIL import Image
+from tqdm import tqdm
 import supervision as sv
 import torch.multiprocessing as mp
 from pycocotools import mask as mask_utils
