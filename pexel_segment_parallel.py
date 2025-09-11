@@ -67,8 +67,9 @@ def set_gpu_for_environment(ngpus: int):
 def check_gpu_avaliability():
     """Get GPU detailed information
 
-    return:
-        the number of avaliable GPUs
+    Returns:
+        gpu_count (int):
+            the number of avaliable GPUs
     """
     if not torch.cuda.is_available():
         print("CUDA is not available. Please check your PyTorch installation.")
@@ -91,8 +92,8 @@ def save_video_mask_as_json(
 ):
     """Save the given three list into .json file
 
-    param:
-        @images:
+    Args:
+        images:
             dict list, each item is a dict
             each dict {
                 "height": int, attribute of the video
@@ -100,7 +101,7 @@ def save_video_mask_as_json(
                 "filename": str, path to the video
                 "id": int, true frame id
             }
-        @annotations:
+        annotations:
             dict list, each item is a dict
             each dict {
                 "id": int, instance id
@@ -110,7 +111,7 @@ def save_video_mask_as_json(
                 "iscrowd": 1,
                 "score": int, the score of SAM 2
             }
-        @categories:
+        categories:
             dict list, each item is a dict
             each dict {
                 "name": str, category name,
@@ -118,7 +119,7 @@ def save_video_mask_as_json(
             }
         
             
-    return:
+    Returns:
         None
     """
     assert save_path is not None, "save_path is None"
@@ -137,31 +138,58 @@ def save_video_mask_as_json(
 def load_video_as_tensor(
         video_path: str,
         resolution_limit: bool=True,
-        discard_interval: int=None,
+        discard_factor: float=None,
+        frame_remain_count: int=None,
 ):
-    """Read a video and save it as a tensor.
+    """Load a video and save it as a tensor.
 
     Args:
-        video_path (str): Path to the input video file.
-        save_path (str): Path to save the output tensor.
-        resolution_limit (bool, optional): limit the resolution of video, which
+        video_path (str):
+            Path to the input video file.
+        resolution_limit (bool, optional):
+            limit the resolution of video, which
             will resize the maximum dim to 1000 if max(height, width) > 1000,
             or will do nothing if max(height, width) <= 1000
-        discard_interval (int, optinal): interval to discard some frames
-
+        discard_factor (int, optinal):
+            factor to discard frames
+        frame_remain_count (int, optinal):
+            remain count of frame target
+    
     Returns:
-        video_tensor (torch.Tensor): tensors of video
-            the shape of tensor is f * c * w * h, RGB format and [0, 1] values
-        frame_idx (list): the true index of frames (if discarded some frames,
+        video_tensor (torch.Tensor):
+            tensors of video the shape of tensor
+            is f * c * w * h, RGB format and [0, 1] values
+        frame_idx (list):
+            the true index of frames (if discarded some frames,
             use this to locate the true index of frame in original video)
+        height (int):
+            video frame height
+        width (int):
+            video frame width
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video file: {video_path}")
+    
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     frames = []
     frame_idx = []
     frame_idx_counter = 0
+    if discard_factor is not None:
+        assert 0 < discard_factor < 1, "discard_factor invalid."
+        frame_remain_count = int(frame_count * (1 - discard_factor))
+    
+    if frame_remain_count is not None:
+        if frame_remain_count < frame_count:
+            step = frame_count / frame_remain_count
+            frame_idx = [int(i * step) for i in range(frame_remain_count)]
+            # print(f"original {frame_count} frames, remain target {frame_remain_count}")
+            # print(f"frame_idx = [{frame_idx}]")
+        else:
+            frame_idx = [idx for idx in range(frame_count)]
+    else:
+        frame_idx = [idx for idx in range(frame_count)]
 
     resize_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     resize_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -174,14 +202,12 @@ def load_video_as_tensor(
         ret, frame = cap.read()
         if not ret:
             break
-        if (discard_interval is None
-            or (frame_idx_counter + 1) % discard_interval != 0):
+        if frame_idx_counter in frame_idx:
             frame = cv2.resize(frame, (resize_width, resize_height))
             # Convert BGR to RGB and then to tensor
             frame = np.ascontiguousarray(frame[:, :, ::-1])
             frame_tensor = torch.from_numpy(frame.transpose(2, 0, 1))
             frames.append(frame_tensor)
-            frame_idx.append(frame_idx_counter)
         frame_idx_counter += 1
 
     cap.release()
@@ -242,13 +268,24 @@ def mask_viz(
         cv2.imwrite(os.path.join(save_dir, f"annotated_frame_{frame_idx:05d}.jpg"), annotated_frame)
     print(f">>> Mask saved at {save_dir}")
 
-def get_mask_json(rank, json_save_folder, video_file_lists, locks, args):    
+def get_mask_json(rank, json_save_folder, video_file_list, locks, args):    
     """extract masks from video and save as coco format json file
 
     Args:
-        rank: the idx of this process
-        json_save_folder: folder to save .json file
-        args: Tuple containing (gpu_id, task_st, task_ed)
+        rank (int):
+            the idx of this process
+        json_save_folder (str):
+            folder to save .json file
+        video_file_list (str):
+            list of video path
+        lock:
+            the lock to limit that only one process is in propagating stage
+            (or tracking stage) on each GPU, or may cause OOM Error
+        args:
+            Tuple containing (gpu_id, task_st, task_ed)
+    
+    Returns:
+        None
     """
 
     gpu_id, task_st, task_ed = args[rank]
@@ -288,7 +325,7 @@ def get_mask_json(rank, json_save_folder, video_file_lists, locks, args):
 
         print(f"[Rank {rank}]: Task processed {task_id - task_st} / {task_ed - task_st} - {(task_id - task_st) / (task_ed - task_st) * 100:.6f}% - Time elapsed {time.time() - start_time:.2f}s")
 
-        video_path = video_file_lists[task_id]
+        video_path = video_file_list[task_id]
 
         parent_dir = os.path.dirname(video_path)
         video_name = os.path.basename(video_path)
@@ -300,7 +337,7 @@ def get_mask_json(rank, json_save_folder, video_file_lists, locks, args):
 
         video_tensor, frame_idx, height, width = load_video_as_tensor(
             video_path,
-            discard_interval=2,
+            frame_remain_count=300,
         )
         video_tensor = video_tensor.to(_device)
         frame_cnt = len(frame_idx)
