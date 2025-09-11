@@ -475,13 +475,30 @@ def get_mask_json(rank, json_save_folder, video_file_list, locks, args):
         """
         video_segments = {}  # video_segments contains the per-frame segmentation results
         gpu_lock.acquire()
-        with torch.no_grad():
-            for out_frame_idx, out_obj_ids, out_mask_logits in _video_predictor.propagate_in_video(inference_state):
-                video_segments[out_frame_idx] = {
-                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
-                    for i, out_obj_id in enumerate(out_obj_ids)
-                }
-            del out_mask_logits
+        try:
+            with torch.no_grad():
+                for out_frame_idx, out_obj_ids, out_mask_logits in _video_predictor.propagate_in_video(inference_state):
+                    video_segments[out_frame_idx] = {
+                        out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy()
+                        for i, out_obj_id in enumerate(out_obj_ids)
+                    }
+                del out_mask_logits
+        except torch.cuda.OutOfMemoryError as e:
+            failed_video_counter += 1
+            print("-" * 80)
+            print(f">>> torch.cuda.OutOfMemoryError Caught:\n{e}\n")
+            print(f"task_id == {task_id}, video_path == {video_path}")
+            print(f"failed video counter: {failed_video_counter}")
+            print(f"Discarded, skip thie video")
+            print("-" * 80)
+            # clear GPU memory
+            del inference_state, video_tensor
+            del image, masks, scores, logits, input_boxes
+            torch.cuda.empty_cache()
+            gc.collect()
+            gpu_lock.release()
+            continue
+
         torch.cuda.empty_cache()
         
         ID_TO_OBJECTS = {i: obj for i, obj in enumerate(OBJECTS, start=1)}
